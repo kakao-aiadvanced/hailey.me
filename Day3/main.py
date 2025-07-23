@@ -259,6 +259,49 @@ def hallucination(state):
         return {"documents": documents, "question": question, "generation": generation, "hallucination_again": False, "was_hallucination": False}
 
 
+### Nodes (기존 노드들 유지하고 새로운 노드들 추가)
+
+def fail_not_relevant(state):
+    """
+    Set generation to failed due to irrelevant documents
+    
+    Args:
+        state (dict): The current graph state
+        
+    Returns:
+        state (dict): Updated state with failure message
+    """
+    print("---FAIL: NOT RELEVANT---")
+    return {
+        "documents": state["documents"],
+        "question": state["question"],
+        "generation": "failed: not relevant",
+        "did_web_search": state["did_web_search"],
+        "hallucination_again": state["hallucination_again"],
+        "was_hallucination": state["was_hallucination"]
+    }
+
+def fail_hallucination(state):
+    """
+    Set generation to failed due to repeated hallucination
+    
+    Args:
+        state (dict): The current graph state
+        
+    Returns:
+        state (dict): Updated state with failure message
+    """
+    print("---FAIL: HALLUCINATION---")
+    return {
+        "documents": state["documents"],
+        "question": state["question"],
+        "generation": "failed: hallucination",
+        "did_web_search": state["did_web_search"],
+        "hallucination_again": state["hallucination_again"],
+        "was_hallucination": state["was_hallucination"]
+    }
+
+
 ### Edges
 def decide_to_generate(state):
     """
@@ -273,15 +316,10 @@ def decide_to_generate(state):
 
     print("---ASSESS GRADED DOCUMENTS---")
     
-    # 테스트를 위해 아직 web search를 하지 않았다면 먼저 web search 수행
-    if not state["did_web_search"]:
-        print("---DECISION: PERFORM WEB SEARCH FOR TESTING (EVEN WITH RELEVANT DOCS)---")
-        return "websearch"
-    
     if state["web_search"] == "Yes":
         if state["did_web_search"]:
-            state["generation"] = "failed: not relevant"
-            return "no retry"
+            print("---DECISION: FAIL - NOT RELEVANT---")
+            return "fail_not_relevant"
         # All documents have been filtered check_relevance
         # We will re-generate a new query
         print(
@@ -308,13 +346,13 @@ def decide_to_generate_after_hallucination(state):
     """
     
     if state["hallucination_again"]:
-        state["generation"] = "failed: hallucination"
-        return "no retry"
+        print("---DECISION: FAIL - HALLUCINATION---")
+        return "fail_hallucination"
     
     if state["was_hallucination"]:
         return "hallucination"
     else:
-        return "no hallucination"
+        return "end"
         
 
 workflow = StateGraph(GraphState)
@@ -325,8 +363,8 @@ workflow.add_node("relevance", relevance)  # grade documents
 workflow.add_node("generate", generate)  # generatae
 workflow.add_node("websearch", web_search)  # web search
 workflow.add_node("hallucination", hallucination)  # hallucination checker
-
-
+workflow.add_node("fail_not_relevant", fail_not_relevant)  # failure due to irrelevant docs
+workflow.add_node("fail_hallucination", fail_hallucination)  # failure due to hallucination
 
 # Build graph
 workflow.set_entry_point("retrieve")
@@ -338,7 +376,7 @@ workflow.add_conditional_edges(
     {
         "websearch": "websearch",
         "generate": "generate",
-        "no retry": END,
+        "fail_not_relevant": "fail_not_relevant",
     },
 )
 workflow.add_edge("websearch", "relevance")
@@ -348,9 +386,12 @@ workflow.add_conditional_edges(
     decide_to_generate_after_hallucination,
     {
         "hallucination": "generate",
-        "no hallucination": END,
+        "end": END,
+        "fail_hallucination": "fail_hallucination",
     },
 )
+workflow.add_edge("fail_not_relevant", END)
+workflow.add_edge("fail_hallucination", END)
 
 # Compile
 app = workflow.compile()
@@ -372,7 +413,12 @@ if generate_report:
             for key, value in output.items():
                 print(f"Finished running: {key}:")
         final_report = value["generation"]
-        st.markdown(final_report)
+        
+        # Check if final_report starts with "failed" and display in red
+        if final_report.startswith("failed"):
+            st.markdown(f'<p style="color: red;">{final_report}</p>', unsafe_allow_html=True)
+        else:
+            st.markdown(final_report)
         print(final_report)
 
 st.sidebar.markdown("---")
